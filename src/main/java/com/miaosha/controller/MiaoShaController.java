@@ -8,6 +8,7 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -19,6 +20,7 @@ import com.miaosha.domain.OrderInfo;
 import com.miaosha.rabbitmq.MQSender;
 import com.miaosha.rabbitmq.MiaoshaMessage;
 import com.miaosha.redis.GoodsKey;
+import com.miaosha.redis.MiaoshaOverKey;
 import com.miaosha.result.CodeMsg;
 import com.miaosha.result.Result;
 import com.miaosha.service.GoodsService;
@@ -26,6 +28,8 @@ import com.miaosha.service.MiaoshaOrderService;
 import com.miaosha.service.MiaoshaService;
 import com.miaosha.service.OrderService;
 import com.miaosha.service.RedisService;
+import com.miaosha.util.MD5Util;
+import com.miaosha.util.UUIDUtil;
 import com.miaosha.vo.GoodsVo;
 
 @Controller
@@ -45,8 +49,8 @@ public class MiaoShaController implements InitializingBean {
 
 	@Autowired
 	MQSender sender;
-	
-	private Map<Long, Boolean> localOverMap=new HashMap<Long, Boolean>();
+
+	private Map<Long, Boolean> localOverMap = new HashMap<Long, Boolean>();
 
 	@Override
 	// 用于系统初始化,将每一个秒杀商品的stock存在redis
@@ -58,34 +62,40 @@ public class MiaoShaController implements InitializingBean {
 		for (GoodsVo goodsVo : goodsList) {// 遍历，每一件秒杀商品
 											// key为goodsid，value为库存，存到redis
 			redisService.set(GoodsKey.getMiaoshaGoodsStock, "" + goodsVo.getId(), goodsVo.getStock_count());
-			localOverMap.put(goodsVo.getId(), false);//标记没有结束
+			localOverMap.put(goodsVo.getId(), false);// 标记没有结束
 		}
 	}
 
-	@RequestMapping(value = "/do_miaosha", method = RequestMethod.POST)
+	@RequestMapping(value = "/{path}/do_miaosha", method = RequestMethod.POST)
 	@ResponseBody
-	public Result<Integer> miaosha(Model model, MiaoshaUser user, @RequestParam("goodsId") long goodsId) {
+	public Result<Integer> miaosha(Model model, MiaoshaUser user, @RequestParam("goodsId") long goodsId,@PathVariable("path") String path) {
 		model.addAttribute("user", user);
 		if (user == null) {
 			return Result.error(CodeMsg.SESSION_ERROR);
 		}
 		
-		boolean over=localOverMap.get(goodsId);
-		if(over){
+		//验证path
+		boolean check=miaoshaOrderService.checkPath(user,goodsId,path);
+		if(!check){
+			return Result.error(CodeMsg.REQUEST_ILLEGAL);
+		}
+		//内存标记，减少redis
+		boolean over = localOverMap.get(goodsId);
+		if (over) {
 			return Result.error(CodeMsg.MIAO_SHA_OVER);
 		}
-		
+
 		// 先将redis中的库存数-1，返回剩余量.redis的--操作是原子性的
 		long stock = redisService.dec(GoodsKey.getMiaoshaGoodsStock, "" + goodsId);
 		if (stock < 0) {
-			//内存标记，减少redis访问
+			// 内存标记，减少redis访问
 			localOverMap.put(goodsId, true);
 			return Result.error(CodeMsg.MIAO_SHA_OVER);
 		}
 
 		// 判断是否已经秒杀过了(),走缓存
 		MiaoshaOrder order = orderService.getMiaoshaOrderByUserIdGoodsId(user.getId(), goodsId);
-		
+
 		if (order != null) {// 若miaoshaorder为！null也就是秒杀过，跳转失败页面：已经参与过
 			return Result.error(CodeMsg.REPEATE_MIAOSHA);
 		}
@@ -122,5 +132,17 @@ public class MiaoShaController implements InitializingBean {
 		}
 		long result = miaoshaOrderService.getMiaoshaResult(user.getId(), goodsId);
 		return Result.success(result);
+	}
+
+	@RequestMapping(value = "/path", method = RequestMethod.GET)
+	@ResponseBody
+	public Result<String> getMiaoshaPath(Model model, MiaoshaUser user, @RequestParam("goodsId") long goodsId) {
+		model.addAttribute("user", user);
+		if (user == null) {
+			return Result.error(CodeMsg.SESSION_ERROR);
+		}
+		String path=miaoshaOrderService.createMiaoshaPath(user,goodsId);
+		
+		return Result.success(path);
 	}
 }

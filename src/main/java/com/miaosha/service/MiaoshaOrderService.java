@@ -8,6 +8,8 @@ import com.miaosha.domain.MiaoshaOrder;
 import com.miaosha.domain.MiaoshaUser;
 import com.miaosha.domain.OrderInfo;
 import com.miaosha.redis.MiaoshaOverKey;
+import com.miaosha.util.MD5Util;
+import com.miaosha.util.UUIDUtil;
 import com.miaosha.vo.GoodsVo;
 
 @Service
@@ -55,5 +57,21 @@ public class MiaoshaOrderService {
 	
 	private boolean getGoodsOver(long goodsId) {
 		return redisService.exists(MiaoshaOverKey.isGoodsOver, ""+goodsId, true);
+	}
+
+
+	public boolean checkPath(MiaoshaUser user, long goodsId, String path) {
+		if(user==null || path == null){
+			return false;
+		}
+		String pathOld=redisService.get(MiaoshaOverKey.getMiaoshaPath, "" + user.getId() + "" + goodsId, String.class);
+		return path.equals(pathOld);
+	}
+
+
+	public String createMiaoshaPath(MiaoshaUser user, long goodsId) {
+		String str = MD5Util.md5(UUIDUtil.uuid() + "123456");
+		redisService.set(MiaoshaOverKey.getMiaoshaPath, "" + user.getId() + "" + goodsId, str);
+		return str;
 	}
 }
