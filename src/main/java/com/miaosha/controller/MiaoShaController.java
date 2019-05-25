@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.servlet.http.HttpServletRequest;
+
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
@@ -14,11 +16,13 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
+import com.miaosha.access.AccessLimit;
 import com.miaosha.domain.MiaoshaOrder;
 import com.miaosha.domain.MiaoshaUser;
 import com.miaosha.domain.OrderInfo;
 import com.miaosha.rabbitmq.MQSender;
 import com.miaosha.rabbitmq.MiaoshaMessage;
+import com.miaosha.redis.AccessKey;
 import com.miaosha.redis.GoodsKey;
 import com.miaosha.redis.MiaoshaOverKey;
 import com.miaosha.result.CodeMsg;
@@ -134,12 +138,27 @@ public class MiaoShaController implements InitializingBean {
 		return Result.success(result);
 	}
 
+	@AccessLimit(seconds=5,maxCount=5,needLogin=true)//自定义注解
 	@RequestMapping(value = "/path", method = RequestMethod.GET)
 	@ResponseBody
-	public Result<String> getMiaoshaPath(Model model, MiaoshaUser user, @RequestParam("goodsId") long goodsId) {
+	public Result<String> getMiaoshaPath(HttpServletRequest request,Model model, MiaoshaUser user, @RequestParam("goodsId") long goodsId) {
 		model.addAttribute("user", user);
 		if (user == null) {
 			return Result.error(CodeMsg.SESSION_ERROR);
+		}
+		/*
+		 * 用户限流设置
+		 */
+		//先查询访问的次数
+		String uri=request.getRequestURI();
+		String key=uri+"_"+user.getId();
+		Integer count=redisService.get(AccessKey.access, key, Integer.class);
+		if(count==null){//说明是第一次访问
+			redisService.set(AccessKey.access, key, 1);
+		}else if(count <5){
+			redisService.incr(AccessKey.access, key);
+		}else{
+			return Result.error(CodeMsg.ACCESS_LIMIT_REACHED);
 		}
 		String path=miaoshaOrderService.createMiaoshaPath(user,goodsId);
 		
